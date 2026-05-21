@@ -17,3 +17,11 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 ulid = { workspace = true }
 cersei = { git = "https://github.com/pacifio/cersei", branch = "main" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "signal"] }
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
