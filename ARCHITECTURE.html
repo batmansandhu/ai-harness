@@ -1,0 +1,96 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI-Harness — Architecture</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+:root{--bg:#0d1320;--bg2:#131a2a;--fg:#e6edf7;--mut:#8a99b8;--line:#1f2a44;--teal:#67e8f9;--amber:#fbbf24;--rose:#f87171;--green:#86efac;}
+*{box-sizing:border-box}html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:'IBM Plex Sans',system-ui,sans-serif;line-height:1.55}
+body{background-image:linear-gradient(to right,rgba(103,232,249,.04) 1px,transparent 1px),linear-gradient(to bottom,rgba(103,232,249,.04) 1px,transparent 1px);background-size:64px 64px;min-height:100vh}
+.wrap{max-width:1100px;margin:0 auto;padding:48px 32px 96px}
+h1{font-size:2.2rem;margin:0 0 .3rem;letter-spacing:-.02em}
+h2{font-size:1.4rem;margin:2.2rem 0 .8rem;border-top:1px solid var(--line);padding-top:1.5rem}
+h3{font-size:1.05rem;margin:1.6rem 0 .5rem;color:var(--teal)}
+.sub{color:var(--mut);font-family:'IBM Plex Mono',monospace;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em}
+.sec-label{display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:.75rem;text-transform:uppercase;letter-spacing:.1em;color:var(--teal);margin-bottom:.4rem}
+.sec-label::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--teal);box-shadow:0 0 8px var(--teal)}
+code,pre,.mono{font-family:'IBM Plex Mono',monospace}
+code{background:var(--bg2);padding:.1rem .35rem;border-radius:3px;font-size:.88em;color:var(--teal)}
+pre{background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:14px 16px;overflow-x:auto;font-size:.85rem;color:#d6deef}
+table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:.92rem}
+thead{position:sticky;top:0;background:var(--bg2)}
+th,td{text-align:left;padding:.55rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--teal);font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:.78rem;text-transform:uppercase}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-family:'IBM Plex Mono',monospace;font-size:.72rem;text-transform:uppercase;background:var(--bg2);border:1px solid var(--line)}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--teal)}
+.pill.warn::before{background:var(--amber)}.pill.warn{color:var(--amber)}
+.pill.ok::before{background:var(--green)}.pill.ok{color:var(--green)}
+.pill.bad::before{background:var(--rose)}.pill.bad{color:var(--rose)}
+a{color:var(--teal)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:1.5rem 0}
+.stat{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:1rem}
+.stat .num{font-size:1.6rem;font-weight:600;color:var(--teal);font-family:'IBM Plex Mono',monospace}
+.stat .lbl{color:var(--mut);font-family:'IBM Plex Mono',monospace;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em}
+</style></head><body><div class="wrap">
+
+<div class="sec-label">aih · architecture</div>
+<h1>AI-Harness — Architecture</h1>
+<p class="sub">A typed Rust shell around subscription Claude · stage 1 · 2026-05</p>
+
+<div class="stats">
+  <div class="stat"><div class="num">3</div><div class="lbl">task classes</div></div>
+  <div class="stat"><div class="num">4</div><div class="lbl">risk classes</div></div>
+  <div class="stat"><div class="num">12</div><div class="lbl">tool contracts</div></div>
+  <div class="stat"><div class="num">5</div><div class="lbl">workflows (W1 live)</div></div>
+</div>
+
+<h2>One-paragraph summary</h2>
+<p>A webhook materializes into a typed <code>Job</code>. Deterministic Rust classifies it, enforces budget, and walks a fixed state machine: <em>intake → classify → plan → [approve?] → execute → verify(HARD) → commit → log</em>. The LLM step is one tool of twelve, invoked by shelling <code>claude -p --output-format=stream-json</code>. R3 (credential-touching) never reaches the LLM. Every job writes one NDJSON row so the eventual self-evolving loop has training data.</p>
+
+<h2>State machine</h2>
+<pre><code>intake ─► classify ─► plan ─┬─► [approve?] ─► execute ─┬─► verify(HARD) ─┬─► commit ─► log
+                            │                          │                  │
+                            └─ if R3+ never reaches    │                  └─► verify(SOFT, opt-in)
+                               LLM, deterministic-     │                       │
+                               only path               │                       └─► critique-retry (×1)
+                                                       │                            then escalate per §7
+                                                       └─► verify failure ─► retry tier per §7</code></pre>
+
+<h2>Routing matrix (stage 1)</h2>
+<table><thead><tr><th>Task</th><th>Risk</th><th>Provider</th><th>Approval</th></tr></thead><tbody>
+<tr><td>T0</td><td>R0–R1</td><td><span class="pill">Rust only</span></td><td>none</td></tr>
+<tr><td>T0</td><td>R2</td><td><span class="pill">Rust only</span></td><td>hard</td></tr>
+<tr><td>T1</td><td>R0–R1</td><td><span class="pill ok">SubscriptionClaude</span></td><td>none</td></tr>
+<tr><td>T1</td><td>R2</td><td><span class="pill ok">SubscriptionClaude</span></td><td>hard</td></tr>
+<tr><td>T1</td><td>R3</td><td><span class="pill bad">N/A</span></td><td>—</td></tr>
+<tr><td>T2</td><td>R0–R1</td><td><span class="pill warn">SubscriptionClaude (budget-capped)</span></td><td>none</td></tr>
+</tbody></table>
+
+<h2>Risk classes</h2>
+<table><thead><tr><th>Class</th><th>Examples</th><th>Default approval</th></tr></thead><tbody>
+<tr><td><span class="pill ok">R0 read-only</span></td><td>git clone, gh api GET, file read, cargo check</td><td>none</td></tr>
+<tr><td><span class="pill">R1 reversible-write</span></td><td>local file edit, cargo build, git commit (local)</td><td>none for self-owned dirs</td></tr>
+<tr><td><span class="pill warn">R2 external-side-effect</span></td><td>gh pr create, gh issue comment, HA service call</td><td>hard until stage 2</td></tr>
+<tr><td><span class="pill bad">R3 credential-touching</span></td><td>SOPS decrypt, age key access, token mint</td><td>always hard; deterministic-only path</td></tr>
+</tbody></table>
+
+<h2>Stage 1 surface area</h2>
+<ul>
+  <li><strong>Live:</strong> W1 <code>career-ops-scan</code> — POSTs hit Axum, harness wraps existing <code>batch-runner.sh</code> (input.tsv → state.tsv → <code>claude -p</code> → reports + tracker). Reports land in <code>projects/career-ops/output/</code>; one NDJSON log row per job.</li>
+  <li><strong>Provider:</strong> only <code>SubscriptionClaude</code>. Ollama via Aperture is wired but disabled until stage 2.</li>
+  <li><strong>Memory:</strong> ephemeral by default. Cersei graph memory is opt-in per workflow; stage-1 workflows are all <code>memory_scope: none</code>.</li>
+  <li><strong>Verify:</strong> hard-verify is non-negotiable. Soft-verify (LLM-as-judge) opt-in per workflow.</li>
+</ul>
+
+<h2>Crate layout</h2>
+<table><thead><tr><th>Crate</th><th>Kind</th><th>Job</th></tr></thead><tbody>
+<tr><td><code>harness-types</code></td><td>lib</td><td>Typed schema: <code>Job</code>, <code>RiskClass</code>, <code>TaskClass</code>, <code>Capability</code>, <code>ToolContract</code>. Lifts §2/§3/§6 from the spec.</td></tr>
+<tr><td><code>harness</code></td><td>bin</td><td>The webhook server, classifier, router, executor, verify gate, and log writer.</td></tr>
+</tbody></table>
+
+<h2>What this is not</h2>
+<ul>
+  <li>Not a LangChain. There is no chain abstraction; there is one state machine.</li>
+  <li>Not an agent framework. The LLM is a tool, not the orchestrator.</li>
+  <li>Not metered API. Subscription Claude only. Cost is constant.</li>
+  <li>Not self-evolving (yet). §8 log schema is designed so the next stage <em>can</em> learn from job outcomes — that loop is deferred.</li>
+</ul>
+
+</div></body></html>

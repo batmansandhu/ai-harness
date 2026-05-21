@@ -1,0 +1,19 @@
+[package]
+name = "harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AI-Harness: Rust deterministic shell that routes subscription Claude through typed workflows."
+
+[[bin]]
+name = "harness"
+path = "src/main.rs"
+
+[dependencies]
+harness-types = { path = "../harness-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+ulid = { workspace = true }
+cersei = { git = "https://github.com/pacifio/cersei", branch = "main" }
