@@ -7,8 +7,11 @@
 use axum::{extract::Json, http::StatusCode, response::IntoResponse, routing::{get, post}, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::process::Stdio;
 use ulid::Ulid;
+
+const JOBS_NDJSON: &str = "/var/log/aih/jobs.ndjson";
 
 #[derive(Debug, Deserialize, Default)]
 pub struct CareerOpsScanRequest {
@@ -36,6 +39,23 @@ pub fn router() -> Router {
 
 async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok\n")
+}
+
+/// Append one NDJSON row to /var/log/aih/jobs.ndjson.
+/// Per plans/AIH/03-routing-policy.html §8. Stage-1 writes the `accepted`
+/// event only — terminal/verify fields land when the reaper ships.
+fn append_job_event(path: &str, row: &serde_json::Value) {
+    let line = match serde_json::to_string(row) {
+        Ok(s) => s,
+        Err(e) => { tracing::warn!(error=%e, "ndjson serialize failed"); return; }
+    };
+    let mut f = match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        Ok(f) => f,
+        Err(e) => { tracing::warn!(error=%e, path=%path, "ndjson open failed"); return; }
+    };
+    if let Err(e) = writeln!(f, "{line}") {
+        tracing::warn!(error=%e, "ndjson write failed");
+    }
 }
 
 async fn career_ops_scan(Json(req): Json<CareerOpsScanRequest>) -> impl IntoResponse {
@@ -80,14 +100,35 @@ async fn career_ops_scan(Json(req): Json<CareerOpsScanRequest>) -> impl IntoResp
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("ssh spawn failed: {e}")).into_response(),
     };
     let pid = child.id();
-    // Detach: do not await. The harness records the job and returns.
     tracing::info!(%job_id, ?pid, "career-ops-scan dispatched");
     drop(child);
+
+    let accepted_at = Utc::now().to_rfc3339();
+
+    // §8 row — stage-1 acceptance event. Terminal fields filled in by the
+    // (future) reaper. Schema-compatible: extra fields, no field renames.
+    append_job_event(JOBS_NDJSON, &serde_json::json!({
+        "job_id": job_id,
+        "capability": "career-ops-scan",
+        "event": "accepted",
+        "task_class": "T0",
+        "risk_class": "R2",
+        "route": {"provider": "DeterministicShell", "model": null},
+        "timing": {"accepted_at": accepted_at},
+        "inputs": {
+            "dry_run": req.dry_run,
+            "parallel": req.parallel,
+            "retry_failed": req.retry_failed,
+        },
+        "pid": pid,
+        "log_file": log_path,
+        "status": "accepted"
+    }));
 
     let body = JobAccepted {
         job_id,
         capability: "career-ops-scan",
-        accepted_at: Utc::now().to_rfc3339(),
+        accepted_at,
         log_file: log_path,
     };
     (StatusCode::ACCEPTED, Json(body)).into_response()
@@ -108,5 +149,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn append_job_event_writes_valid_ndjson() {
+        let dir = std::env::temp_dir().join(format!("aih-test-{}", Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("jobs.ndjson");
+        let row = serde_json::json!({"job_id": "01TEST", "event": "accepted"});
+        append_job_event(path.to_str().unwrap(), &row);
+        append_job_event(path.to_str().unwrap(), &row);
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2);
+        for line in lines {
+            let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(parsed["job_id"], "01TEST");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
