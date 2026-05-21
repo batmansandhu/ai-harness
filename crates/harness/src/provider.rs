@@ -71,13 +71,24 @@ impl LlmProvider for SubscriptionClaudeProvider {
 
 /// Declared per §4 but disabled until stage 2 (per 00-plan.html).
 /// Wired so the router type-checks; never actually called in stage 1.
-pub struct OllamaViaApertureProvider;
+/// Aperture host (Tailscale-managed): `aih.tailb37a01.ts.net` — reachable via the
+/// OPNsense subnet router. Stage 2 will route `cheap-iteration` jobs here once
+/// Ollama is configured as an upstream and V12/GPU is back.
+pub struct OllamaViaApertureProvider {
+    pub aperture_host: String,
+}
+
+impl Default for OllamaViaApertureProvider {
+    fn default() -> Self {
+        Self { aperture_host: "aih.tailb37a01.ts.net".into() }
+    }
+}
 
 impl LlmProvider for OllamaViaApertureProvider {
     fn name(&self) -> &'static str { "OllamaViaAperture" }
 
     fn complete(&self, _prompt: &str) -> Result<String> {
-        anyhow::bail!("OllamaViaAperture is wired but disabled until stage 2");
+        anyhow::bail!("OllamaViaAperture is wired but disabled until stage 2 (host={})", self.aperture_host);
     }
 }
 
@@ -87,7 +98,7 @@ mod tests {
 
     #[test]
     fn ollama_provider_is_disabled() {
-        let p = OllamaViaApertureProvider;
+        let p = OllamaViaApertureProvider::default();
         let err = p.complete("anything").unwrap_err().to_string();
         assert!(err.contains("disabled"));
     }

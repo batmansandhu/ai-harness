@@ -7,3 +7,6 @@ Cargo.lock.bak
 /.env
 /.env.*
 !/.env.example
+
+# Local install helpers (deployed via sudo to system paths)
+/bin/
